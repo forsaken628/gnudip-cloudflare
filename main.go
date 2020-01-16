@@ -9,18 +9,25 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"hash"
 	"html/template"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
-	"os"
 	"strconv"
+	"strings"
 	"time"
+
+	"github.com/cloudflare/cloudflare-go"
 )
 
-func init() {
+var (
+	api *cloudflare.API
+	hhs hash.Hash
+)
+
+func main() {
 	buf := make([]byte, 10)
 	_, err := io.ReadFull(rand.Reader, buf)
 	if err != nil {
@@ -28,20 +35,24 @@ func init() {
 	}
 
 	hhs = hmac.New(sha256.New, buf)
-}
 
-var hhs hash.Hash
+	api, err = cloudflare.NewWithAPIToken(CfToken)
+	if err != nil {
+		log.Fatal(err)
+	}
 
-func main() {
-	err := http.ListenAndServe(ListenAddr, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	err = http.ListenAndServe(ListenAddr, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" {
-			sendErr(w, http.StatusMethodNotAllowed, "StatusMethodNotAllowed")
+			send(w, http.StatusMethodNotAllowed, map[string]string{
+				"msg": "StatusMethodNotAllowed",
+			})
 			return
 		}
+		log.Println(r.URL.String())
 
 		if r.URL.RawQuery == "" {
 			salt, time0, sign := salt()
-			sendBody(w, map[string]string{
+			send(w, http.StatusOK, map[string]string{
 				"salt": salt,
 				"time": time0,
 				"sign": sign,
@@ -52,20 +63,36 @@ func main() {
 		req := &updateReq{}
 		err := req.BindAndCheck(r.URL.Query())
 		if err != nil {
-			sendErr(w, http.StatusBadRequest, err.Error())
+			send(w, http.StatusBadRequest, map[string]string{
+				"error": err.Error(),
+			})
 			return
+		}
+
+		if req.Reqc == 2 {
+			n := strings.LastIndex(r.RemoteAddr, ":")
+			if n == -1 {
+				log.Println("invalid RemoteAddr", r.RemoteAddr)
+				send(w, http.StatusInternalServerError, map[string]string{
+					"error": "invalid RemoteAddr",
+				})
+				return
+			}
+			req.Addr = r.RemoteAddr[:n]
 		}
 
 		res, err := update(req)
 		if err != nil {
-			sendErr(w, 500, err.Error())
+			send(w, http.StatusBadRequest, map[string]string{
+				"error": err.Error(),
+			})
 			return
 		}
 
-		sendBody(w, res)
+		send(w, http.StatusOK, res)
 	}))
 	if err != nil {
-		fmt.Fprintln(os.Stdout, err)
+		log.Fatal(err)
 	}
 }
 
@@ -156,19 +183,37 @@ func (r *updateReq) BindAndCheck(values url.Values) error {
 }
 
 func update(req *updateReq) (map[string]string, error) {
+	var err error
 	switch req.Reqc {
 	case 0: //"0" - register the address passed with this request
-
+		err = api.UpdateDNSRecord(CfZone, CfRecordID, cloudflare.DNSRecord{
+			Content: req.Addr,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return map[string]string{
+			"retc": "0",
+		}, nil
 	case 1: //"1" - go offline
-
+		err = api.UpdateDNSRecord(CfZone, CfRecordID, cloudflare.DNSRecord{
+			Content: "0.0.0.0",
+		})
+		return map[string]string{
+			"retc": "2",
+		}, nil
 	case 2: //"2" - register the address you see me at, and pass it back to me
-	//the IP address to be registered, if the request code is "0" ("addr=")
-
+		//the IP address to be registered, if the request code is "0" ("addr=")
+		err = api.UpdateDNSRecord(CfZone, CfRecordID, cloudflare.DNSRecord{
+			Content: req.Addr,
+		})
+		return map[string]string{
+			"retc": "0",
+			"addr": req.Addr,
+		}, nil
 	default:
 		return nil, errors.New("unknown reqc")
 	}
-
-	return nil, nil
 }
 
 func sendBody(w io.Writer, vals map[string]string) error {
@@ -199,10 +244,13 @@ func sendBody(w io.Writer, vals map[string]string) error {
 	return nil
 }
 
-func sendErr(w http.ResponseWriter, code int, msg string) {
+func send(w http.ResponseWriter, code int, vals map[string]string) {
 	h := w.Header()
-	h.Set("Content-Type", "text/plain")
+	h.Set("Content-Type", "text/html")
 
 	w.WriteHeader(code)
-	w.Write([]byte(msg))
+	if code != http.StatusOK {
+		log.Println(code, vals)
+	}
+	sendBody(w, vals)
 }
