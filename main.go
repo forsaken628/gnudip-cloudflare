@@ -158,7 +158,9 @@ func (r *updateReq) BindAndCheck(values url.Values) error {
 
 	user := values.Get("user")
 	pass := values.Get("pass")
-	hs := md5.Sum([]byte(Pass + "." + r.Salt))
+	
+	hs := md5.Sum([]byte(Pass))
+	hs = md5.Sum([]byte(hex.EncodeToString(hs[:]) + "." + r.Salt))
 	if user != User || pass != hex.EncodeToString(hs[:]) {
 		return errors.New("pass not match")
 	}
