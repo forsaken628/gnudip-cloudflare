@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/md5"
 	"crypto/rand"
@@ -20,10 +21,10 @@ import (
 	"time"
 
 	"github.com/cloudflare/cloudflare-go"
+	"github.com/vultr/govultr"
 )
 
 var (
-	api *cloudflare.API
 	hhs hash.Hash
 )
 
@@ -35,11 +36,6 @@ func main() {
 	}
 
 	hhs = hmac.New(sha256.New, buf)
-
-	api, err = cloudflare.NewWithAPIToken(CfToken)
-	if err != nil {
-		log.Fatal(err)
-	}
 
 	err = http.ListenAndServe(ListenAddr, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" {
@@ -158,7 +154,7 @@ func (r *updateReq) BindAndCheck(values url.Values) error {
 
 	user := values.Get("user")
 	pass := values.Get("pass")
-	
+
 	hs := md5.Sum([]byte(Pass))
 	hs = md5.Sum([]byte(hex.EncodeToString(hs[:]) + "." + r.Salt))
 	if user != User || pass != hex.EncodeToString(hs[:]) {
@@ -185,12 +181,11 @@ func (r *updateReq) BindAndCheck(values url.Values) error {
 }
 
 func update(req *updateReq) (map[string]string, error) {
+	updater := Updater(vultr{})
 	var err error
 	switch req.Reqc {
 	case 0: //"0" - register the address passed with this request
-		err = api.UpdateDNSRecord(CfZone, CfRecordID, cloudflare.DNSRecord{
-			Content: req.Addr,
-		})
+		err = updater.Update(req.Addr)
 		if err != nil {
 			return nil, err
 		}
@@ -198,17 +193,19 @@ func update(req *updateReq) (map[string]string, error) {
 			"retc": "0",
 		}, nil
 	case 1: //"1" - go offline
-		err = api.UpdateDNSRecord(CfZone, CfRecordID, cloudflare.DNSRecord{
-			Content: "0.0.0.0",
-		})
+		err = updater.Update("0.0.0.0")
+		if err != nil {
+			return nil, err
+		}
 		return map[string]string{
 			"retc": "2",
 		}, nil
 	case 2: //"2" - register the address you see me at, and pass it back to me
 		//the IP address to be registered, if the request code is "0" ("addr=")
-		err = api.UpdateDNSRecord(CfZone, CfRecordID, cloudflare.DNSRecord{
-			Content: req.Addr,
-		})
+		err = updater.Update(req.Addr)
+		if err != nil {
+			return nil, err
+		}
 		return map[string]string{
 			"retc": "0",
 			"addr": req.Addr,
@@ -254,5 +251,35 @@ func send(w http.ResponseWriter, code int, vals map[string]string) {
 	if code != http.StatusOK {
 		log.Println(code, vals)
 	}
-	sendBody(w, vals)
+	err := sendBody(w, vals)
+	if err != nil {
+		log.Println(err)
+	}
+}
+
+type Updater interface {
+	Update(addr string) error
+}
+
+type vultr struct{}
+
+func (vultr) Update(addr string) error {
+	c := govultr.NewClient(nil, ApiKey)
+
+	return c.DNSRecord.Update(context.Background(), Domain, &govultr.DNSRecord{
+		RecordID: RecordID,
+		Data:     addr,
+	})
+}
+
+type cf struct{}
+
+func (cf) Update(addr string) error {
+	api, err := cloudflare.NewWithAPIToken(CfToken)
+	if err != nil {
+		return err
+	}
+	return api.UpdateDNSRecord(CfZone, CfRecordID, cloudflare.DNSRecord{
+		Content: addr,
+	})
 }
