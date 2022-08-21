@@ -24,9 +24,7 @@ import (
 	"github.com/vultr/govultr"
 )
 
-var (
-	hhs hash.Hash
-)
+var hhs hash.Hash
 
 func main() {
 	buf := make([]byte, 10)
@@ -184,7 +182,7 @@ func update(req *updateReq) (map[string]string, error) {
 	updater := Updater(vultr{})
 	var err error
 	switch req.Reqc {
-	case 0: //"0" - register the address passed with this request
+	case 0: // "0" - register the address passed with this request
 		err = updater.Update(req.Addr)
 		if err != nil {
 			return nil, err
@@ -192,7 +190,7 @@ func update(req *updateReq) (map[string]string, error) {
 		return map[string]string{
 			"retc": "0",
 		}, nil
-	case 1: //"1" - go offline
+	case 1: // "1" - go offline
 		err = updater.Update("0.0.0.0")
 		if err != nil {
 			return nil, err
@@ -200,8 +198,8 @@ func update(req *updateReq) (map[string]string, error) {
 		return map[string]string{
 			"retc": "2",
 		}, nil
-	case 2: //"2" - register the address you see me at, and pass it back to me
-		//the IP address to be registered, if the request code is "0" ("addr=")
+	case 2: // "2" - register the address you see me at, and pass it back to me
+		// the IP address to be registered, if the request code is "0" ("addr=")
 		err = updater.Update(req.Addr)
 		if err != nil {
 			return nil, err
@@ -279,7 +277,7 @@ func (cf) Update(addr string) error {
 	if err != nil {
 		return err
 	}
-	return api.UpdateDNSRecord(CfZone, CfRecordID, cloudflare.DNSRecord{
+	return api.UpdateDNSRecord(context.Background(), CfZone, CfRecordID, cloudflare.DNSRecord{
 		Content: addr,
 	})
 }
