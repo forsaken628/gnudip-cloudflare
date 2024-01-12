@@ -277,7 +277,13 @@ func (cf) Update(addr string) error {
 	if err != nil {
 		return err
 	}
-	return api.UpdateDNSRecord(context.Background(), CfZone, CfRecordID, cloudflare.DNSRecord{
-		Content: addr,
-	})
+
+	_, err = api.UpdateDNSRecord(
+		context.Background(),
+		cloudflare.ZoneIdentifier(CfZone),
+		cloudflare.UpdateDNSRecordParams{
+			ID:      CfRecordID,
+			Content: addr,
+		})
+	return err
 }
